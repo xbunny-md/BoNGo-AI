@@ -11,7 +11,6 @@ import pino from 'pino';
 import express from 'express';
 import 'dotenv/config';
 import Groq from 'groq-sdk';
-import { GoogleGenerativeAI } from '@google/generative-ai';
 import axios from 'axios';
 import yts from 'yt-search';
 import { Buffer } from 'buffer';
@@ -32,7 +31,6 @@ const messageStore = new Map();
 const rateLimitMap = new Map();
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
 function convertBuffers(obj) {
     if (!obj) return obj;
@@ -55,28 +53,84 @@ function getMessageText(msg) {
     return '';
 }
 
-async function callAI(contextMsg) {
-    const systemPrompt = `You are ${botConfig.botName}, an autonomous WhatsApp agent. Analyze user intent from text and context. Respond using the same language as the user. Return ONLY valid JSON with this schema: {"action": "string", "target": "string", "params": {}, "reply": "string", "react": "string", "updateConfig": {}}. Valid actions: sendMessage, kickUser, addUser, promoteUser, demoteUser, deleteMessage, downloadSong, downloadVideo, getProfilePic, getUserIP, likeStatus, enableAntiDelete, disableAntiDelete, forwardToDM, editMessage, setGroupDesc, setGroupSubject, setProfilePicture, updateProfilePicture, muteUser, unmuteUser, getStatusViewers, changePrefix, changeBotName, setStatus, setProfileStatus. Interpret user intent across languages. Map removal requests to kickUser, admin requests to promoteUser, media requests to downloadSong or downloadVideo, profile requests to getProfilePic, group management to setGroupSubject or setGroupDesc or setProfilePicture. For dangerous actions, verify isOwner or isAdmin before approving. On unauthorized attempt, set reply to permission denied message in user language. Apply updateConfig to modify runtime configuration.`;
-    
-    try {
-        const completion = await groq.chat.completions.create({
-            messages: [
-                { role: "system", content: systemPrompt + ` Context: ${JSON.stringify(contextMsg)}` },
-                { role: "user", content: contextMsg.text }
-            ],
-            model: "llama-3.1-70b-versatile",
-            response_format: { type: "json_object" }
-        });
-        return JSON.parse(completion.choices[0].message.content);
-    } catch (e) {
-        console.error("Groq fallback", e.message);
+const GROQ_MODELS = [
+    'llama-3.1-8b-instant',
+    'llama-3.3-70b-versatile',
+    'mixtral-8x7b-32768'
+]
+
+async function callGroqWithFallback(messages) {
+    if (!process.env.GROQ_API_KEY) throw new Error('GROQ_API_KEY missing')
+    for (const model of GROQ_MODELS) {
         try {
-            const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash", generationConfig: { responseMimeType: "application/json" } });
-            const result = await model.generateContent(systemPrompt + `\nContext: ${JSON.stringify(contextMsg)}\nUser Input: ${contextMsg.text}`);
-            return JSON.parse(result.response.text());
+            const res = await axios.post('https://api.groq.com/openai/v1/chat/completions', {
+                model: model,
+                messages: messages,
+                temperature: 0.7,
+                max_tokens: 600,
+                response_format: { type: "json_object" }
+            }, {
+                headers: { 'Authorization': `Bearer ${process.env.GROQ_API_KEY}` },
+                timeout: 15000
+            })
+            console.log(`\x1b[32mGROQ_MODEL:\x1b[0m ${model} Success`)
+            return JSON.parse(res.data.choices[0].message.content)
+        } catch (e) {
+            console.log(`\x1b[33mGROQ_MODEL:\x1b[0m ${model} Failed: ${e.response?.status || e.message}`)
+            if (model === GROQ_MODELS[GROQ_MODELS.length - 1]) throw e
+        }
+    }
+}
+
+async function callGeminiRest(systemPrompt, userText) {
+    if (!process.env.GEMINI_OAUTH_TOKEN) throw new Error('GEMINI_OAUTH_TOKEN missing')
+    try {
+        const res = await axios.post('https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent', {
+            contents: [{
+                parts: [{ text: systemPrompt + `\nUser Input: ${userText}` }]
+            }],
+            generationConfig: {
+                responseMimeType: "application/json",
+                temperature: 0.7,
+                maxOutputTokens: 600
+            }
+        }, {
+            headers: {
+                'Authorization': `Bearer ${process.env.GEMINI_OAUTH_TOKEN}`,
+                'Content-Type': 'application/json'
+            },
+            timeout: 15000
+        })
+        console.log('\x1b[32mAI_PROVIDER:\x1b[0m Gemini REST Success')
+        const text = res.data.candidates[0].content.parts[0].text
+        return JSON.parse(text)
+    } catch (e) {
+        console.log(`\x1b[31mGEMINI_REST_ERROR:\x1b[0m ${e.response?.status} ${e.message}`)
+        throw e
+    }
+}
+
+async function callAI(contextMsg) {
+    const systemPrompt = `You are ${botConfig.botName}, an autonomous WhatsApp agent. Analyze user intent from text and context. Respond using the same language as the user. Return ONLY valid JSON with this schema: {"action": "string", "target": "string", "params": {}, "reply": "string", "react": "string", "updateConfig": {}}. Valid actions: sendMessage, kickUser, addUser, promoteUser, demoteUser, deleteMessage, downloadSong, downloadVideo, getProfilePic, getUserIP, likeStatus, enableAntiDelete, disableAntiDelete, forwardToDM, editMessage, setGroupDesc, setGroupSubject, setProfilePicture, updateProfilePicture, muteUser, unmuteUser, getStatusViewers, changePrefix, changeBotName, setStatus, setProfileStatus. Interpret user intent across languages. Map removal requests to kickUser, admin requests to promoteUser, media requests to downloadSong or downloadVideo, profile requests to getProfilePic, group management to setGroupSubject or setGroupDesc or setProfilePicture. For dangerous actions, verify isOwner or isAdmin before approving. On unauthorized attempt, set reply to permission denied message in user language. Apply updateConfig to modify runtime configuration. Context: ${JSON.stringify(contextMsg)}`
+
+    const messages = [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: contextMsg.text }
+    ]
+
+    try {
+        return await callGroqWithFallback(messages)
+    } catch (e) {
+        console.log(`\x1b[31mGROQ_ALL_FAILED:\x1b[0m ${e.message}`)
+        try {
+            return await callGeminiRest(systemPrompt, contextMsg.text)
         } catch (e2) {
-            console.error("Gemini fallback", e2.message);
-            return { action: "sendMessage", reply: "AI Error: I'm currently unable to process requests.", react: "❌" };
+            console.log(`\x1b[31mALL_AI_FAILED:\x1b[0m ${e2.message}`)
+            return {
+                action: "sendMessage",
+                reply: `AI Error: All providers failed. Check API keys.`,
+                react: "❌"
+            }
         }
     }
 }

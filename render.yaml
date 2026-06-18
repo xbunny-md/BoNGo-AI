@@ -10,7 +10,7 @@ services:
         sync: false
       - key: GROQ_API_KEY
         sync: false
-      - key: GEMINI_API_KEY
+      - key: GEMINI_OAUTH_TOKEN
         sync: false
       - key: OWNER_NUMBER
         sync: false
