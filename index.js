@@ -155,7 +155,7 @@ async function executeAction(sock, plan, context) {
                     if (!context.isOwner) throw new Error('Permission denied');
                 }
                 if (context.quotedMsg && getContentType(context.quotedMsg.message) === 'imageMessage') {
-                    const buffer = await downloadMediaMessage(context.quotedMsg, 'buffer', {}, { logger: pino({ level: 'silent' }) });
+                    const buffer = await downloadMediaMessage(context.quotedMsg, 'buffer', {}, { logger: pino({ level: 'info' }) });
                     await sock.updateProfilePicture(jid, buffer);
                 } else if (params.url) {
                      await sock.updateProfilePicture(jid, { url: params.url });
@@ -194,6 +194,7 @@ async function executeAction(sock, plan, context) {
             await sock.sendMessage(jid, { react: { text: react, key: context.msg.key } });
         }
     } catch (e) {
+        console.error('Error:', e.message);
         if (context.reactMsgKey) {
             await sock.sendMessage(jid, { text: reply || `Error: ${e.message}`, edit: context.reactMsgKey });
         } else {
@@ -206,7 +207,9 @@ async function executeAction(sock, plan, context) {
 }
 
 async function startBot() {
+    console.log('BoNGo AI Starting...');
     const sessionId = process.env.SESSION_ID || '';
+    console.log('SESSION_ID Valid:', sessionId.startsWith('SWIFTBOT~'));
     if (!sessionId.startsWith('SWIFTBOT~')) {
         console.error('Invalid SESSION_ID. Must start with SWIFTBOT~');
         return;
@@ -217,19 +220,21 @@ async function startBot() {
         const base64Str = sessionId.split('SWIFTBOT~')[1];
         const jsonStr = Buffer.from(base64Str, 'base64').toString('utf-8');
         parsedCreds = JSON.parse(jsonStr);
+        console.log('Credentials parsed successfully');
     } catch (e) {
         console.error('Failed to parse SESSION_ID', e);
         return;
     }
 
+    console.log('Socket created, connecting...');
     const { version } = await fetchLatestBaileysVersion();
     const sock = makeWASocket({
         auth: {
             creds: parsedCreds,
-            keys: makeCacheableSignalKeyStore({}, pino({ level: 'silent' }))
+            keys: makeCacheableSignalKeyStore({}, pino({ level: 'info' }))
         },
         version,
-        logger: pino({ level: 'silent' }),
+        logger: pino({ level: 'info' }),
         browser: Browsers.ubuntu('Chrome'),
         connectTimeoutMs: 60000,
         keepAliveIntervalMs: 30000,
@@ -239,12 +244,15 @@ async function startBot() {
 
     sock.ev.on('connection.update', (update) => {
         const { connection, lastDisconnect } = update;
+        if (connection) {
+            console.log('Connection Status:', connection);
+        }
         if (connection === 'close') {
             const shouldReconnect = (lastDisconnect.error)?.output?.statusCode !== DisconnectReason.loggedOut;
             if (shouldReconnect) startBot();
             else process.exit(0);
         } else if (connection === 'open') {
-            console.log('BoNGo AI connected to WhatsApp');
+            console.log('BoNGo AI Connected as:', sock.user.id);
         }
     });
 
@@ -252,18 +260,43 @@ async function startBot() {
         if (m.type !== 'notify') return;
         
         for (let msg of m.messages) {
-            if (!msg.message || msg.key.fromMe) continue;
+            if (!msg.message) continue;
             
             messageStore.set(msg.key.id, msg);
 
             const text = getMessageText(msg);
-            if (!text.startsWith(botConfig.prefix)) continue;
 
             const sender = msg.key.participant || msg.key.remoteJid;
             const jid = msg.key.remoteJid;
             const isGroup = jid.endsWith('@g.us');
             const ownerNumber = process.env.OWNER_NUMBER + '@s.whatsapp.net';
             const isOwner = sender === ownerNumber;
+
+            let groupName = "";
+            let isAdmin = false;
+            let botIsAdmin = false;
+            
+            if (isGroup) {
+                try {
+                    const groupMetadata = await sock.groupMetadata(jid);
+                    groupName = groupMetadata.subject;
+                    const participants = groupMetadata.participants;
+                    const botJid = sock.user.id.split(':')[0] + '@s.whatsapp.net';
+                    const senderParticipant = participants.find(p => p.id === sender);
+                    const botParticipant = participants.find(p => p.id === botJid);
+                    isAdmin = senderParticipant?.admin === 'admin' || senderParticipant?.admin === 'superadmin';
+                    botIsAdmin = botParticipant?.admin === 'admin' || botParticipant?.admin === 'superadmin';
+                } catch (e) {
+                    console.error('Error fetching group metadata:', e.message);
+                }
+            }
+
+            console.log(`MSG: ${text}`);
+            console.log(`WHERE: ${isGroup ? groupName : 'Private Chat'}`);
+            console.log(`JID: ${jid}`);
+            console.log(`CMD: ${text.startsWith(botConfig.prefix)}`);
+
+            if (!text.startsWith(botConfig.prefix)) continue;
             
             // Rate Limit Logic
             if (!isOwner) {
@@ -282,21 +315,6 @@ async function startBot() {
             await sock.sendMessage(jid, { react: { text: "🤔", key: msg.key } });
             const waitMsgInfo = await sock.sendMessage(jid, { text: "🤔 Processing..." }, { quoted: msg });
             const reactMsgKey = waitMsgInfo.key;
-
-            let groupName = "";
-            let isAdmin = false;
-            let botIsAdmin = false;
-            
-            if (isGroup) {
-                const groupMetadata = await sock.groupMetadata(jid);
-                groupName = groupMetadata.subject;
-                const participants = groupMetadata.participants;
-                const botJid = sock.user.id.split(':')[0] + '@s.whatsapp.net';
-                const senderParticipant = participants.find(p => p.id === sender);
-                const botParticipant = participants.find(p => p.id === botJid);
-                isAdmin = senderParticipant?.admin === 'admin' || senderParticipant?.admin === 'superadmin';
-                botIsAdmin = botParticipant?.admin === 'admin' || botParticipant?.admin === 'superadmin';
-            }
 
             const context = {
                 text, sender, isOwner, isGroup, groupName, isAdmin, botIsAdmin,
