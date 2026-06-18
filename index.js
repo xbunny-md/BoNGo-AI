@@ -28,7 +28,6 @@ const botConfig = { prefix: process.env.PREFIX || ".", botName: process.env.BOT_
 const userMemory = new Map();
 const groupConfig = new Map();
 const messageStore = new Map();
-const rateLimitMap = new Map();
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
@@ -406,20 +405,6 @@ async function startBot() {
             console.log(`\x1b[32mCMD:\x1b[0m ${text.startsWith(botConfig.prefix)}`);
 
             if (!text.startsWith(botConfig.prefix)) continue;
-            
-            // Rate Limit Logic
-            if (!isOwner) {
-                const now = Date.now();
-                const userRates = rateLimitMap.get(sender) || [];
-                const recentRates = userRates.filter(t => now - t < 300000); // 5 min rolling window
-                if (recentRates.length >= 4) {
-                    await sock.sendMessage(jid, { react: { text: "⏳", key: msg.key } });
-                    await sock.sendMessage(jid, { text: "Rate limit exceeded. Please wait 5 minutes." }, { quoted: msg });
-                    continue;
-                }
-                recentRates.push(now);
-                rateLimitMap.set(sender, recentRates);
-            }
 
             await sock.sendMessage(jid, { react: { text: "🤔", key: msg.key } });
             const waitMsgInfo = await sock.sendMessage(jid, { text: "🤔 Processing..." }, { quoted: msg });
