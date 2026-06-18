@@ -35,18 +35,11 @@ const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
 function convertBuffers(obj) {
     if (!obj) return obj;
-    if (obj.type === 'Buffer' && Array.isArray(obj.data)) {
-        return Buffer.from(obj.data);
-    }
-    if (Array.isArray(obj)) {
-        return obj.map(convertBuffers);
-    }
+    if (obj?.type === 'Buffer' && Array.isArray(obj.data)) return Buffer.from(obj.data);
+    if (Array.isArray(obj)) return obj.map(convertBuffers);
     if (typeof obj === 'object') {
-        const result = {};
-        for (const key in obj) {
-            result[key] = convertBuffers(obj[key]);
-        }
-        return result;
+        for (const key in obj) obj[key] = convertBuffers(obj[key]);
+        return obj;
     }
     return obj;
 }
@@ -77,7 +70,7 @@ async function callAI(contextMsg) {
     } catch (e) {
         console.error("Groq fallback", e.message);
         try {
-            const model = genAI.getGenerativeModel({ model: "gemini-1.5-pro", generationConfig: { responseMimeType: "application/json" } });
+            const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash", generationConfig: { responseMimeType: "application/json" } });
             const result = await model.generateContent(systemPrompt + `\nContext: ${JSON.stringify(contextMsg)}\nUser Input: ${contextMsg.text}`);
             return JSON.parse(result.response.text());
         } catch (e2) {
@@ -226,9 +219,9 @@ async function executeAction(sock, plan, context) {
 }
 
 async function startBot() {
-    console.log('BoNGo AI Starting...');
+    console.log('\x1b[34mBoNGo AI Starting...\x1b[0m');
     const sessionId = process.env.SESSION_ID || '';
-    console.log('SESSION_ID Valid:', sessionId.startsWith('SWIFTBOT~'));
+    console.log('\x1b[34mSESSION_ID Valid:\x1b[0m', sessionId.startsWith('SWIFTBOT~'));
     if (!sessionId.startsWith('SWIFTBOT~')) {
         console.error('Invalid SESSION_ID. Must start with SWIFTBOT~');
         return;
@@ -240,13 +233,14 @@ async function startBot() {
         const jsonStr = Buffer.from(base64Str, 'base64').toString('utf-8');
         parsedCreds = JSON.parse(jsonStr);
         parsedCreds = convertBuffers(parsedCreds);
-        console.log('Credentials parsed successfully');
+        console.log('\x1b[32mBuffer conversion complete\x1b[0m');
+        console.log('\x1b[34mCredentials parsed successfully\x1b[0m');
     } catch (e) {
         console.error('Failed to parse SESSION_ID', e);
         return;
     }
 
-    console.log('Socket created, connecting...');
+    console.log('\x1b[34mSocket created, connecting...\x1b[0m');
     const { version } = await fetchLatestBaileysVersion();
     const { state, saveCreds } = await useMultiFileAuthState('./session');
     
@@ -268,7 +262,7 @@ async function startBot() {
 
     sock.ev.on('creds.update', saveCreds);
 
-    sock.ev.on('connection.update', (update) => {
+    sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect } = update;
         if (connection) {
             console.log('Connection Status:', connection);
@@ -278,7 +272,51 @@ async function startBot() {
             if (shouldReconnect) startBot();
             else process.exit(0);
         } else if (connection === 'open') {
-            console.log('BoNGo AI Connected as:', sock.user.id);
+            console.log('\x1b[32mBoNGo AI Connected as:\x1b[0m', sock.user.id);
+            
+            async function testGroqPrimary() {
+                console.log('\x1b[34mTesting Primary API: Groq\x1b[0m');
+                try {
+                    const start = Date.now();
+                    const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+                        method: 'POST',
+                        headers: {
+                            'Authorization': `Bearer ${process.env.GROQ_API_KEY}`,
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            model: 'llama-3.1-70b-versatile',
+                            messages: [{ role: 'user', content: 'hello 👋' }],
+                            max_tokens: 10,
+                            temperature: 0.1
+                        })
+                    });
+                    const latency = Date.now() - start;
+                    if (res.status === 200) {
+                        const data = await res.json();
+                        console.log(`\x1b[32mGROQ:\x1b[0m 200 OK | ${latency}ms | Response: ${data.choices[0].message.content}`);
+                    } else {
+                        console.log(`\x1b[31mGROQ:\x1b[0m ${res.status} | WARNING: Primary AI not working`);
+                    }
+                } catch (err) {
+                    console.log(`\x1b[31mGROQ:\x1b[0m ERROR | WARNING: Primary AI not working: ${err.message}`);
+                }
+            }
+
+            async function sendConnectedPing() {
+                const selfJid = sock.user.id;
+                try {
+                    await sock.sendMessage(selfJid, { 
+                        text: 'BoNGo AI Status: Online\nConnection verified\nPrimary AI tested' 
+                    });
+                    console.log('\x1b[32mSELF_PING:\x1b[0m Connected message sent to self');
+                } catch (e) {
+                    console.log(`\x1b[31mSELF_PING:\x1b[0m Failed: ${e.message}`);
+                }
+            }
+
+            await testGroqPrimary();
+            await sendConnectedPing();
         }
     });
 
@@ -317,10 +355,10 @@ async function startBot() {
                 }
             }
 
-            console.log(`MSG: ${text}`);
-            console.log(`WHERE: ${isGroup ? groupName : 'Private Chat'}`);
-            console.log(`JID: ${jid}`);
-            console.log(`CMD: ${text.startsWith(botConfig.prefix)}`);
+            console.log(`\x1b[36mMSG:\x1b[0m ${text}`);
+            console.log(`\x1b[33mWHERE:\x1b[0m ${isGroup ? groupName : 'Private Chat'}`);
+            console.log(`\x1b[35mJID:\x1b[0m ${jid}`);
+            console.log(`\x1b[32mCMD:\x1b[0m ${text.startsWith(botConfig.prefix)}`);
 
             if (!text.startsWith(botConfig.prefix)) continue;
             
