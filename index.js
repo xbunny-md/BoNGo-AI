@@ -1,25 +1,22 @@
-import {
-    makeWASocket,
-    fetchLatestBaileysVersion,
-    makeCacheableSignalKeyStore,
-    useMultiFileAuthState,
-    Browsers,
+import makeWASocket, {
     DisconnectReason,
+    useMultiFileAuthState,
+    makeCacheableSignalKeyStore,
+    Browsers,
+    fetchLatestBaileysVersion,
     getContentType,
     downloadMediaMessage
 } from '@whiskeysockets/baileys';
 import pino from 'pino';
-import dotenv from 'dotenv';
+import express from 'express';
+import 'dotenv/config';
 import Groq from 'groq-sdk';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import axios from 'axios';
 import yts from 'yt-search';
-import express from 'express';
 import { Buffer } from 'buffer';
 
-dotenv.config();
-
-process.on('unhandledRejection', (reason, promise) => {
+process.on('unhandledRejection', (reason) => {
     console.log('\x1b[31mUnhandled Rejection:\x1b[0m', reason);
 });
 
@@ -224,21 +221,23 @@ async function executeAction(sock, plan, context) {
 
 async function startBot() {
     console.log('\x1b[34mBoNGo AI Starting...\x1b[0m');
-    const sessionId = process.env.SESSION_ID || '';
-    console.log('\x1b[34mSESSION_ID Valid:\x1b[0m', sessionId.startsWith('SWIFTBOT~'));
-    if (!sessionId.startsWith('SWIFTBOT~')) {
+    console.log('\x1b[34mSESSION_ID Valid:\x1b[0m', process.env.SESSION_ID.startsWith('SWIFTBOT~'));
+    if (!process.env.SESSION_ID.startsWith('SWIFTBOT~')) {
         console.error('Invalid SESSION_ID. Must start with SWIFTBOT~');
         return;
     }
 
     let parsedCreds;
     try {
-        const base64Str = sessionId.split('SWIFTBOT~')[1];
-        const jsonStr = Buffer.from(base64Str, 'base64').toString('utf-8');
-        parsedCreds = JSON.parse(jsonStr);
+        parsedCreds = JSON.parse(Buffer.from(process.env.SESSION_ID.replace('SWIFTBOT~', ''), 'base64').toString());
         parsedCreds = convertBuffers(parsedCreds);
         console.log('\x1b[32mBuffer conversion complete\x1b[0m');
         console.log('\x1b[34mCredentials parsed successfully\x1b[0m');
+        
+        if (!parsedCreds.noiseKey || !parsedCreds.signedIdentityKey) {
+            console.log('\x1b[31mSESSION CORRUPTED:\x1b[0m Missing keys. Re-generate SESSION_ID.');
+            process.exit(1);
+        }
     } catch (e) {
         console.error('Failed to parse SESSION_ID', e);
         return;
@@ -253,15 +252,16 @@ async function startBot() {
     const sock = makeWASocket({
         auth: {
             creds: state.creds,
-            keys: makeCacheableSignalKeyStore(state.keys, pino({ level: 'info' }))
+            keys: makeCacheableSignalKeyStore(state.keys, pino({ level: 'silent' }))
         },
         version,
-        logger: pino({ level: 'info' }),
+        logger: pino({ level: 'silent' }),
         browser: Browsers.ubuntu('Chrome'),
         connectTimeoutMs: 60000,
         keepAliveIntervalMs: 30000,
         markOnlineOnConnect: true,
-        syncFullHistory: false
+        syncFullHistory: false,
+        getMessage: async () => ({})
     });
 
     sock.ev.on('creds.update', saveCreds);
@@ -271,63 +271,55 @@ async function startBot() {
         
         if(connection === 'close') {
             const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
-            console.log('\x1b[31mConnection closed due to:\x1b[0m', lastDisconnect?.error);
-            if(shouldReconnect) {
-                console.log('\x1b[33mReconnecting...\x1b[0m');
-                startBot();
-            }
+            console.log('\x1b[31mConnection closed:\x1b[0m', lastDisconnect?.error?.message);
+            if(shouldReconnect) setTimeout(() => startBot(), 5000);
         }
         
         if(connection === 'open') {
             console.log('\x1b[32mBoNGo AI Connected as:\x1b[0m', sock.user.id);
-            
-            await new Promise(resolve => setTimeout(resolve, 3000));
-            
+            await new Promise(r => setTimeout(r, 5000));
+
+            // TEST GROQ
             console.log('\x1b[34mTesting Primary API: Groq\x1b[0m');
             try {
                 const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
                     method: 'POST',
-                    headers: {
-                        'Authorization': `Bearer ${process.env.GROQ_API_KEY}`,
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        model: 'llama-3.1-70b-versatile',
-                        messages: [{ role: 'user', content: 'hello 👋' }],
-                        max_tokens: 10
-                    })
+                    headers: { 'Authorization': `Bearer ${process.env.GROQ_API_KEY}`, 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ model: 'llama-3.1-70b-versatile', messages: [{ role: 'user', content: 'hello' }], max_tokens: 10 })
                 });
-                if (res.status === 200) {
-                    console.log(`\x1b[32mGROQ:\x1b[0m 200 OK`);
-                } else {
-                    console.log(`\x1b[31mGROQ:\x1b[0m ${res.status} | WARNING: Primary AI not working`);
-                }
-            } catch (err) {
-                console.log(`\x1b[31mGROQ:\x1b[0m ERROR | WARNING: Primary AI not working: ${err.message}`);
-            }
-            
+                const data = await res.json();
+                console.log(res.status === 200 ? `\x1b[32mGROQ:\x1b[0m 200 OK` : `\x1b[31mGROQ:\x1b[0m ${res.status} | WARNING`);
+            } catch (e) { console.log(`\x1b[31mGROQ:\x1b[0m ERROR: ${e.message}`); }
+
+            // TEST GEMINI FALLBACK
+            console.log('\x1b[34mTesting Fallback API: Gemini\x1b[0m');
             try {
-                await new Promise(resolve => setTimeout(resolve, 2000));
-                const selfJid = sock.user.id;
-                await sock.sendMessage(selfJid, { 
-                    text: 'BoNGo AI Online - All systems verified' 
+                const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ contents: [{ parts: [{ text: 'hello' }] }] })
                 });
+                console.log(res.status === 200 ? `\x1b[32mGEMINI:\x1b[0m 200 OK` : `\x1b[31mGEMINI:\x1b[0m ${res.status} | WARNING`);
+            } catch (e) { console.log(`\x1b[31mGEMINI:\x1b[0m ERROR: ${e.message}`); }
+
+            // SELF TEST MESSAGE
+            try {
+                await new Promise(r => setTimeout(r, 2000));
+                await sock.sendMessage(sock.user.id, { text: 'BoNGo AI Online - All systems verified' });
                 console.log('\x1b[32mSELF_PING:\x1b[0m Connected message sent');
-            } catch (e) {
-                console.log(`\x1b[31mSELF_PING:\x1b[0m Failed: ${e.message}`);
-            }
+            } catch (e) { console.log(`\x1b[31mSELF_PING:\x1b[0m Failed: ${e.message}`); }
         }
     });
 
     sock.ev.on('messages.upsert', async (m) => {
         if (m.type !== 'notify') return;
         
-        for (let msg of m.messages) {
-            if (!msg.message) continue;
+        for (const msg of m.messages) {
+            if (!msg.message) continue; // Skip decrypt errors
             
             messageStore.set(msg.key.id, msg);
 
-            const text = getMessageText(msg);
+            const text = msg.message.conversation || msg.message.extendedTextMessage?.text || msg.message.imageMessage?.caption || '';
 
             const sender = msg.key.participant || msg.key.remoteJid;
             const jid = msg.key.remoteJid;
@@ -335,7 +327,7 @@ async function startBot() {
             const ownerNumber = process.env.OWNER_NUMBER + '@s.whatsapp.net';
             const isOwner = sender === ownerNumber;
 
-            let groupName = "";
+            let groupName = 'Private Chat';
             let isAdmin = false;
             let botIsAdmin = false;
             
