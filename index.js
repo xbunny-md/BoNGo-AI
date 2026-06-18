@@ -19,6 +19,10 @@ import { Buffer } from 'buffer';
 
 dotenv.config();
 
+process.on('unhandledRejection', (reason, promise) => {
+    console.log('\x1b[31mUnhandled Rejection:\x1b[0m', reason);
+});
+
 const app = express();
 app.get('/', (req, res) => res.json({ status: 'BoNGo AI is active' }));
 const PORT = process.env.PORT || 3000;
@@ -264,59 +268,54 @@ async function startBot() {
 
     sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect } = update;
-        if (connection) {
-            console.log('Connection Status:', connection);
+        
+        if(connection === 'close') {
+            const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
+            console.log('\x1b[31mConnection closed due to:\x1b[0m', lastDisconnect?.error);
+            if(shouldReconnect) {
+                console.log('\x1b[33mReconnecting...\x1b[0m');
+                startBot();
+            }
         }
-        if (connection === 'close') {
-            const shouldReconnect = (lastDisconnect.error)?.output?.statusCode !== DisconnectReason.loggedOut;
-            if (shouldReconnect) startBot();
-            else process.exit(0);
-        } else if (connection === 'open') {
+        
+        if(connection === 'open') {
             console.log('\x1b[32mBoNGo AI Connected as:\x1b[0m', sock.user.id);
             
-            async function testGroqPrimary() {
-                console.log('\x1b[34mTesting Primary API: Groq\x1b[0m');
-                try {
-                    const start = Date.now();
-                    const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-                        method: 'POST',
-                        headers: {
-                            'Authorization': `Bearer ${process.env.GROQ_API_KEY}`,
-                            'Content-Type': 'application/json'
-                        },
-                        body: JSON.stringify({
-                            model: 'llama-3.1-70b-versatile',
-                            messages: [{ role: 'user', content: 'hello 👋' }],
-                            max_tokens: 10,
-                            temperature: 0.1
-                        })
-                    });
-                    const latency = Date.now() - start;
-                    if (res.status === 200) {
-                        const data = await res.json();
-                        console.log(`\x1b[32mGROQ:\x1b[0m 200 OK | ${latency}ms | Response: ${data.choices[0].message.content}`);
-                    } else {
-                        console.log(`\x1b[31mGROQ:\x1b[0m ${res.status} | WARNING: Primary AI not working`);
-                    }
-                } catch (err) {
-                    console.log(`\x1b[31mGROQ:\x1b[0m ERROR | WARNING: Primary AI not working: ${err.message}`);
+            await new Promise(resolve => setTimeout(resolve, 3000));
+            
+            console.log('\x1b[34mTesting Primary API: Groq\x1b[0m');
+            try {
+                const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${process.env.GROQ_API_KEY}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        model: 'llama-3.1-70b-versatile',
+                        messages: [{ role: 'user', content: 'hello 👋' }],
+                        max_tokens: 10
+                    })
+                });
+                if (res.status === 200) {
+                    console.log(`\x1b[32mGROQ:\x1b[0m 200 OK`);
+                } else {
+                    console.log(`\x1b[31mGROQ:\x1b[0m ${res.status} | WARNING: Primary AI not working`);
                 }
+            } catch (err) {
+                console.log(`\x1b[31mGROQ:\x1b[0m ERROR | WARNING: Primary AI not working: ${err.message}`);
             }
-
-            async function sendConnectedPing() {
+            
+            try {
+                await new Promise(resolve => setTimeout(resolve, 2000));
                 const selfJid = sock.user.id;
-                try {
-                    await sock.sendMessage(selfJid, { 
-                        text: 'BoNGo AI Status: Online\nConnection verified\nPrimary AI tested' 
-                    });
-                    console.log('\x1b[32mSELF_PING:\x1b[0m Connected message sent to self');
-                } catch (e) {
-                    console.log(`\x1b[31mSELF_PING:\x1b[0m Failed: ${e.message}`);
-                }
+                await sock.sendMessage(selfJid, { 
+                    text: 'BoNGo AI Online - All systems verified' 
+                });
+                console.log('\x1b[32mSELF_PING:\x1b[0m Connected message sent');
+            } catch (e) {
+                console.log(`\x1b[31mSELF_PING:\x1b[0m Failed: ${e.message}`);
             }
-
-            await testGroqPrimary();
-            await sendConnectedPing();
         }
     });
 
