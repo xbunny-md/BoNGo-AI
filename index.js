@@ -2,6 +2,7 @@ import {
     makeWASocket,
     fetchLatestBaileysVersion,
     makeCacheableSignalKeyStore,
+    useMultiFileAuthState,
     Browsers,
     DisconnectReason,
     getContentType,
@@ -31,6 +32,24 @@ const rateLimitMap = new Map();
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+
+function convertBuffers(obj) {
+    if (!obj) return obj;
+    if (obj.type === 'Buffer' && Array.isArray(obj.data)) {
+        return Buffer.from(obj.data);
+    }
+    if (Array.isArray(obj)) {
+        return obj.map(convertBuffers);
+    }
+    if (typeof obj === 'object') {
+        const result = {};
+        for (const key in obj) {
+            result[key] = convertBuffers(obj[key]);
+        }
+        return result;
+    }
+    return obj;
+}
 
 function getMessageText(msg) {
     if (!msg.message) return '';
@@ -220,6 +239,7 @@ async function startBot() {
         const base64Str = sessionId.split('SWIFTBOT~')[1];
         const jsonStr = Buffer.from(base64Str, 'base64').toString('utf-8');
         parsedCreds = JSON.parse(jsonStr);
+        parsedCreds = convertBuffers(parsedCreds);
         console.log('Credentials parsed successfully');
     } catch (e) {
         console.error('Failed to parse SESSION_ID', e);
@@ -228,10 +248,14 @@ async function startBot() {
 
     console.log('Socket created, connecting...');
     const { version } = await fetchLatestBaileysVersion();
+    const { state, saveCreds } = await useMultiFileAuthState('./session');
+    
+    state.creds = parsedCreds;
+
     const sock = makeWASocket({
         auth: {
-            creds: parsedCreds,
-            keys: makeCacheableSignalKeyStore({}, pino({ level: 'info' }))
+            creds: state.creds,
+            keys: makeCacheableSignalKeyStore(state.keys, pino({ level: 'info' }))
         },
         version,
         logger: pino({ level: 'info' }),
@@ -241,6 +265,8 @@ async function startBot() {
         markOnlineOnConnect: true,
         syncFullHistory: false
     });
+
+    sock.ev.on('creds.update', saveCreds);
 
     sock.ev.on('connection.update', (update) => {
         const { connection, lastDisconnect } = update;
