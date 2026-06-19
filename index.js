@@ -319,15 +319,16 @@ CORE RULES:
 3. For user targets, ALWAYS return JID format: 255xxx@s.whatsapp.net or 120363xxx@g.us
 4. Extract JID from: contextMsg.quotedSender, contextMsg.mentionedJids[0], or number in text.
 5. If user says "ping" or "speed" return action:"ping", react:"⚡".
-6. If user says "menu" or "help" return action:"menu", react:"📋".
-7. If user replies to image with "sticker" return action:"tosticker".
-8. If user says "delete" and quoted message exists return action:"deleteMessage".
-9. If user tags everyone return action:"tagall".
-10. If user says "make me admin" return action:"promoteUser" with target as sender JID.
-11. Everything is AI-driven. No assumptions. No hardcoded logic.
-12. If user sends or replies to TikTok link return action:"tiktok", react:"⏬".
-13. If user sends or replies to Facebook video link return action:"facebook", react:"⏬".
-14. If user sends or replies to Instagram reel/post link return action:"instagram", react:"⏬".
+6. If user says "owa kaka embu tuma dp yangu" return action:"getProfilePic", target:contextMsg.sender, react:"🖼️".
+7. If user says "menu" or "help" return action:"menu", react:"📋".
+8. If user replies to image with "sticker" return action:"tosticker".
+9. If user says "delete" and quoted message exists return action:"deleteMessage".
+10. If user tags everyone return action:"tagall".
+11. If user says "make me admin" return action:"promoteUser" with target as sender JID.
+12. Everything is AI-driven. No assumptions. No hardcoded logic.
+13. If user sends or replies to TikTok link return action:"tiktok", react:"⏬".
+14. If user sends or replies to Facebook video link return action:"facebook", react:"⏬".
+15. If user sends or replies to Instagram reel/post link return action:"instagram", react:"⏬".
 
 PERMISSION CONTEXT:
 isOwner: ${contextMsg.isOwner}, isAdmin: ${contextMsg.isAdmin}, botIsAdmin: ${contextMsg.botIsAdmin}, isGroup: ${contextMsg.isGroup}
@@ -435,17 +436,31 @@ async function startBot() {
     // ZERO-COMMAND MESSAGE HANDLER
     sock.ev.on('messages.upsert', async (m) => {
         const msg = m.messages[0];
-        if (!msg.message || msg.key.fromMe) return;
+        if (!msg.message) return;
 
-        const text = getMessageText(msg);
+        let text = getMessageText(msg);
+        
+        if (msg.key.fromMe && text) {
+            if (text.startsWith('🤔 Processing...') || text.startsWith('✅') || text.startsWith('❌')) {
+                return;
+            }
+        }
+
+        const prefix = process.env.PREFIX || botConfig.prefix;
+        if (!text || !text.startsWith(prefix)) {
+            return;
+        }
+
         const sender = msg.key.participant || msg.key.remoteJid;
         const jid = msg.key.remoteJid;
         const isGroup = jid.endsWith('@g.us');
 
         console.log(`\x1b[36mMSG:\x1b[0m ${text || '[Media]'}`);
         console.log(`\x1b[36mWHERE:\x1b[0m ${isGroup ? 'Group' : 'DM'}`);
-        console.log(`\x1b[36mFROM:\\x1b[0m ${sender.split('@')[0]}`);
-        console.log(`\x1b[36mJID:\\x1b[0m ${jid}`);
+        console.log(`\x1b[36mFROM:\x1b[0m ${sender.split('@')[0]}`);
+        console.log(`\x1b[36mJID:\x1b[0m ${jid}`);
+
+        text = text.slice(prefix.length).trim();
 
         // React immediately
         try {
@@ -509,7 +524,7 @@ async function startBot() {
             if (plan.action && cases.has(plan.action)) {
                 console.log(`\x1b[32mCASE_EXEC:\x1b[0m ${plan.action}`);
                 const caseFile = cases.get(plan.action);
-                const { default: executeCase } = await import(`file://${caseFile}?update=${Date.now()}`);
+                const { default: executeCase } = await import(`file://${caseFile}`);
                 await executeCase(sock, plan, {...contextMsg, msg, getContentType, downloadMediaMessage, addMemory, getMemory });
             } else if (plan.reply) {
                 // Do nothing, reply will be in processing message
@@ -546,7 +561,7 @@ async function startBot() {
     sock.ev.on('messages.upsert', async (m) => {
         if (m.type!== 'notify') return;
         for (const msg of m.messages) {
-            if (!msg.key.fromMe && msg.message) {
+            if (msg.message) {
                 const key = `${msg.key.remoteJid}_${msg.key.id}`;
                 antideleteConfig.cache[key] = {
                     msg: msg,
