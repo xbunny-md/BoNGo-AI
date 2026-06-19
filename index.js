@@ -311,23 +311,23 @@ async function callGeminiAxios(prompt, apiKey) {
 async function callAI(contextMsg) {
     const systemPrompt = `You are ${botConfig.botName}, a fully autonomous WhatsApp AI. Return ONLY valid JSON: {"action":"string","target":"string","params":{},"reply":"string","react":"string"}.
 
-AVAILABLE ACTIONS: ${Array.from(cases.keys()).join(', ')}
+AVAILABLE ACTIONS: ${Array.from(cases.keys()).join(', ')}, chat
 
 CORE RULES:
 1. Analyze user intent from text, quoted message, mentions, media, message type.
 2. Select exact action from available list. If no match use "chat".
 3. For user targets, ALWAYS return JID format: 255xxx@s.whatsapp.net or 120363xxx@g.us
 4. Extract JID from: contextMsg.quotedSender, contextMsg.mentionedJids[0], or number in text.
-5. If user says "ping" or "speed" return action:"ping".
-6. If user says "menu" or "help" return action:"menu".
+5. If user says "ping" or "speed" return action:"ping", react:"⚡".
+6. If user says "menu" or "help" return action:"menu", react:"📋".
 7. If user replies to image with "sticker" return action:"tosticker".
 8. If user says "delete" and quoted message exists return action:"deleteMessage".
 9. If user tags everyone return action:"tagall".
 10. If user says "make me admin" return action:"promoteUser" with target as sender JID.
 11. Everything is AI-driven. No assumptions. No hardcoded logic.
-12. If user sends or replies to TikTok link return action:"tiktok".
-13. If user sends or replies to Facebook video link return action:"facebook".
-14. If user sends or replies to Instagram reel/post link return action:"instagram".
+12. If user sends or replies to TikTok link return action:"tiktok", react:"⏬".
+13. If user sends or replies to Facebook video link return action:"facebook", react:"⏬".
+14. If user sends or replies to Instagram reel/post link return action:"instagram", react:"⏬".
 
 PERMISSION CONTEXT:
 isOwner: ${contextMsg.isOwner}, isAdmin: ${contextMsg.isAdmin}, botIsAdmin: ${contextMsg.botIsAdmin}, isGroup: ${contextMsg.isGroup}
@@ -344,11 +344,12 @@ CONTEXT: ${JSON.stringify(contextMsg)}`;
         try {
             const result = await callGroqAxios(model, messages, keyData.key);
             console.log(`\x1b[32mAI_GROQ:\x1b[0m ${model}`);
+            if (!result.react) result.react = "💬";
             return result;
         } catch (e) {
             const status = e.response?.status;
-            if (status === 429) console.log(`\x1b[33mGROQ_429:\x1b[0m ${model} limit hit`);
-            else console.log(`\x1b[33mGROQ_FAIL:\x1b[0m ${model} ${status || e.message}`);
+            if (status === 429) console.log(`\x1b[33mAI_GROQ_FAIL:\x1b[0m ${model} limit hit`);
+            else console.log(`\x1b[33mAI_GROQ_FAIL:\x1b[0m ${model} ${status || e.message}`);
         }
     }
 
@@ -356,12 +357,12 @@ CONTEXT: ${JSON.stringify(contextMsg)}`;
     const geminiKey = getGeminiKey();
     if (geminiKey) {
         try {
-            const result = await callGeminiAxios(systemPrompt + `
-User Input: ${contextMsg.text}`, geminiKey);
+            const result = await callGeminiAxios(systemPrompt + `\nUser Input: ${contextMsg.text}`, geminiKey);
             console.log(`\x1b[32mAI_GEMINI:\x1b[0m Success`);
+            if (!result.react) result.react = "💬";
             return result;
         } catch (e) {
-            console.log(`\x1b[33mGEMINI_FAIL:\x1b[0m ${e.response?.status || e.message}`);
+            console.log(`\x1b[33mAI_GEMINI_FAIL:\x1b[0m ${e.response?.status || e.message}`);
         }
     }
 
@@ -370,6 +371,7 @@ User Input: ${contextMsg.text}`, geminiKey);
 
 
 async function startBot() {
+    console.log('\x1b[32mSERVER:\x1b[0m Starting...');
     console.log('\x1b[34mBoNGo AI Starting...\x1b[0m');
     console.log('\x1b[34mSESSION_ID Valid:\x1b[0m', process.env.SESSION_ID.startsWith('SWIFTBOT~'));
     if (!process.env.SESSION_ID.startsWith('SWIFTBOT~')) {
@@ -427,37 +429,6 @@ async function startBot() {
         
         if(connection === 'open') {
             console.log('\x1b[32mBoNGo AI Connected as:\x1b[0m', sock.user.id);
-            await new Promise(r => setTimeout(r, 5000));
-
-            // TEST GROQ
-            console.log('\x1b[34mTesting Primary API: Groq\x1b[0m');
-            try {
-                const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-                    method: 'POST',
-                    headers: { 'Authorization': `Bearer ${process.env.GROQ_API_KEY}`, 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ model: 'llama-3.1-70b-versatile', messages: [{ role: 'user', content: 'hello' }], max_tokens: 10 })
-                });
-                const data = await res.json();
-                console.log(res.status === 200 ? `\x1b[32mGROQ:\x1b[0m 200 OK` : `\x1b[31mGROQ:\x1b[0m ${res.status} | WARNING`);
-            } catch (e) { console.log(`\x1b[31mGROQ:\x1b[0m ERROR: ${e.message}`); }
-
-            // TEST GEMINI FALLBACK
-            console.log('\x1b[34mTesting Fallback API: Gemini\x1b[0m');
-            try {
-                const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ contents: [{ parts: [{ text: 'hello' }] }] })
-                });
-                console.log(res.status === 200 ? `\x1b[32mGEMINI:\x1b[0m 200 OK` : `\x1b[31mGEMINI:\x1b[0m ${res.status} | WARNING`);
-            } catch (e) { console.log(`\x1b[31mGEMINI:\x1b[0m ERROR: ${e.message}`); }
-
-            // SELF TEST MESSAGE
-            try {
-                await new Promise(r => setTimeout(r, 2000));
-                await sock.sendMessage(sock.user.id, { text: 'BoNGo AI Online - All systems verified' });
-                console.log('\x1b[32mSELF_PING:\x1b[0m Connected message sent');
-            } catch (e) { console.log(`\x1b[31mSELF_PING:\x1b[0m Failed: ${e.message}`); }
         }
     });
 
@@ -470,6 +441,24 @@ async function startBot() {
         const sender = msg.key.participant || msg.key.remoteJid;
         const jid = msg.key.remoteJid;
         const isGroup = jid.endsWith('@g.us');
+
+        console.log(`\x1b[36mMSG:\x1b[0m ${text || '[Media]'}`);
+        console.log(`\x1b[36mWHERE:\x1b[0m ${isGroup ? 'Group' : 'DM'}`);
+        console.log(`\x1b[36mFROM:\\x1b[0m ${sender.split('@')[0]}`);
+        console.log(`\x1b[36mJID:\\x1b[0m ${jid}`);
+
+        // React immediately
+        try {
+            await sock.sendMessage(jid, { react: { text: '🤔', key: msg.key } });
+        } catch(e) {}
+
+        let processingMsg = null;
+        try {
+            processingMsg = await sock.sendMessage(jid, { text: '🤔 Processing...' }, { quoted: msg });
+            console.log('\x1b[35mPROCESSING:\x1b[0m Sent');
+        } catch(e) {
+            console.log('\x1b[31mPROCESSING_FAIL:\x1b[0m', e.message);
+        }
 
         let groupMetadata = null;
         let botIsAdmin = false;
@@ -489,7 +478,7 @@ async function startBot() {
             sender: sender,
             jid: jid,
             isGroup: isGroup,
-            isOwner: sender === botConfig.ownerNumber + '@s.whatsapp.net',
+            isOwner: sender === (botConfig.ownerNumber + '@s.whatsapp.net'),
             isAdmin: isAdmin,
             botIsAdmin: botIsAdmin,
             quotedMsg: msg.message?.extendedTextMessage?.contextInfo?.quotedMessage ? {
@@ -504,23 +493,54 @@ async function startBot() {
         };
 
         try {
+            console.log(`\x1b[36mAI_INPUT:\x1b[0m Context collected`);
             const plan = await callAI(contextMsg);
+            console.log(`\x1b[36mAI_PLAN:\x1b[0m Action: ${plan.action}, React: ${plan.react}`);
 
-            if (plan.react) await sock.sendMessage(jid, { react: { text: plan.react, key: msg.key } });
+            if (plan.react) {
+                try {
+                    await sock.sendMessage(jid, { react: { text: plan.react, key: msg.key } });
+                    console.log(`\x1b[32mREACT:\x1b[0m ${plan.react}`);
+                } catch(e) { console.log(`\x1b[31mREACT_FAIL:\x1b[0m`, e.message); }
+            }
 
+            let execResultText = plan.reply || 'Task completed';
+            
             if (plan.action && cases.has(plan.action)) {
+                console.log(`\x1b[32mCASE_EXEC:\x1b[0m ${plan.action}`);
                 const caseFile = cases.get(plan.action);
                 const { default: executeCase } = await import(`file://${caseFile}?update=${Date.now()}`);
-                await executeCase(sock, plan, {...contextMsg, msg, getContentType, downloadMediaMessage });
+                await executeCase(sock, plan, {...contextMsg, msg, getContentType, downloadMediaMessage, addMemory, getMemory });
             } else if (plan.reply) {
-                await sock.sendMessage(jid, { text: plan.reply }, { quoted: msg });
+                // Do nothing, reply will be in processing message
             }
+
+            if (processingMsg) {
+                try {
+                    await sock.sendMessage(jid, { text: `✅ ${execResultText}`, edit: processingMsg.key });
+                    console.log(`\x1b[32mEDIT:\x1b[0m Success`);
+                } catch(e) { console.log(`\x1b[31mEDIT_FAIL:\x1b[0m`, e.message); }
+            }
+
+            try {
+                await sock.sendMessage(jid, { react: { text: '✅', key: msg.key } });
+                console.log(`\x1b[32mFINAL_REACT:\x1b[0m ✅`);
+            } catch(e) { console.log(`\x1b[31mFINAL_REACT_FAIL:\x1b[0m`, e.message); }
+
         } catch (e) {
-            console.log('\x1b[31mROUTER_ERROR:\x1b[0m', e.message);
-            await sock.sendMessage(jid, { text: `Error: ${e.message}` }, { quoted: msg });
+            console.log('\x1b[31mCASE_ERROR:\x1b[0m', e.message);
+            if (processingMsg) {
+                try {
+                    await sock.sendMessage(jid, { text: `❌ Error: ${e.message}`, edit: processingMsg.key });
+                    console.log(`\x1b[32mEDIT:\x1b[0m Error shown`);
+                } catch(err) { console.log(`\x1b[31mEDIT_FAIL:\x1b[0m`, err.message); }
+            }
+            try {
+                await sock.sendMessage(jid, { react: { text: '❌', key: msg.key } });
+                console.log(`\x1b[32mFINAL_REACT:\x1b[0m ❌`);
+            } catch(err) { console.log(`\x1b[31mFINAL_REACT_FAIL:\x1b[0m`, err.message); }
         }
     });
-
 
     // Cache all messages for antidelete
     sock.ev.on('messages.upsert', async (m) => {
