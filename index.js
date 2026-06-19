@@ -307,33 +307,59 @@ async function callGeminiAxios(prompt, apiKey) {
     return JSON.parse(res.data.candidates[0].content.parts[0].text);
 }
 
-// UNIVERSAL AI ROUTER - DECIDES EVERYTHING
-async function callAI(contextMsg) {
-    const systemPrompt = `You are ${botConfig.botName}, a fully autonomous WhatsApp AI. Return ONLY valid JSON: {"action":"string","target":"string","params":{},"reply":"string","react":"string"}.
+function isOwner(senderJid) {
+    if (!senderJid) return false;
+    const ownerNum = (botConfig.ownerNumber || process.env.OWNER_NUMBER || '').toString().replace(/[^0-9]/g, '');
+    const senderNum = senderJid.split('@')[0].split(':')[0];
+    return senderNum === ownerNum;
+}
 
-AVAILABLE ACTIONS: ${Array.from(cases.keys()).join(', ')}, chat
+// UNIVERSAL AI ROUTER - DECIDES EVERYTHING
+async function callAI(contextMsg, quotedJid, mentionedJids, isGroup, isAdmin, isOwnerUser) {
+    const systemPrompt = `You are ` + botConfig.botName + `, BoNGo AI Router. Return valid JSON ONLY. No text outside JSON.
+Output: {"action":"string","target":"string","params":{},"reply":"string","react":"string"}
+
+AVAILABLE ACTIONS: ` + Array.from(cases.keys()).join(', ') + `
 
 CORE RULES:
-1. Analyze user intent from text, quoted message, mentions, media, message type.
-2. Select exact action from available list. If no match use "chat".
-3. For user targets, ALWAYS return JID format: 255xxx@s.whatsapp.net or 120363xxx@g.us
-4. Extract JID from: contextMsg.quotedSender, contextMsg.mentionedJids[0], or number in text.
-5. If user says "ping" or "speed" return action:"ping", react:"⚡".
-6. If user says "owa kaka embu tuma dp yangu" return action:"getProfilePic", target:contextMsg.sender, react:"🖼️".
-7. If user says "menu" or "help" return action:"menu", react:"📋".
-8. If user replies to image with "sticker" return action:"tosticker".
-9. If user says "delete" and quoted message exists return action:"deleteMessage".
-10. If user tags everyone return action:"tagall".
-11. If user says "make me admin" return action:"promoteUser" with target as sender JID.
-12. Everything is AI-driven. No assumptions. No hardcoded logic.
-13. If user sends or replies to TikTok link return action:"tiktok", react:"⏬".
-14. If user sends or replies to Facebook video link return action:"facebook", react:"⏬".
-15. If user sends or replies to Instagram reel/post link return action:"instagram", react:"⏬".
+1. "action" MUST EXACTLY match a filename in /cases/ without .case.js. Available: kick,add,promote,demote,tagall,hidetag,mute,unmute,setGroupSubject,setGroupDesc,setProfilePicture,getGroupInfo,getGroupLink,revokeGroupLink,groupSettings,groupMetadata,groupParticipantsUpdate,groupInviteCode,groupRevokeInvite,groupJoinApproval,groupApproveJoin,groupRejectJoin,groupPendingRequests,groupAnnounce,groupNotAnnounce,groupLocked,groupUnlocked,setGroupEphemeral,getGroupEphemeral,lockChat,unlockChat,kickall,ban,unban,warn,unwarn,remove,setDescription,setSubject,setIcon,updateParticipants,leave,chat,ping,menu,help,deleteMessage,getProfilePic,antidelete,changePrefix,changeBotName,setStatus,leaveGroup,ttt,rps,dice,coinflip,guess,tosticker,toimage,tomp3,tomp4,togif,towebp,topng,tojpg,tovoice,totext,tiktok,facebook,instagram,youtube
+2. If action is NOT "chat", set reply:"". Case file sends all output. AI must NOT generate content for cases.
+3. If action is "chat", set reply to your answer.
+4. DYNAMIC TARGET RESOLUTION: For actions on users, use context priority: 1. If replying to someone, set target to quoted participant JID. 2. If message mentions users, set target to first mentioned JID. 3. If user refers to themselves or no target, set target:"sender". NEVER leave target empty for user-targeted actions.
+5. For tagall/tag everyone/hidetag intents -> action:"tagall", react:"📢", reply:""
+6. For kick/remove/ban intents -> action:"kick", react:"👢", reply:"", target: apply DYNAMIC TARGET RESOLUTION
+7. For add/invite intents -> action:"add", react:"➕", reply:"", target: phone number with @s.whatsapp.net
+8. For promote/admin intents -> action:"promote", react:"⬆️", reply:"", target: apply DYNAMIC TARGET RESOLUTION
+9. For demote/unadmin intents -> action:"demote", react:"⬇️", reply:"", target: apply DYNAMIC TARGET RESOLUTION
+10. For mute/close group intents -> action:"mute", react:"🔇", reply:""
+11. For unmute/open group intents -> action:"unmute", react:"🔊", reply:""
+12. For link/group link intents -> action:"getGroupLink", react:"🔗", reply:""
+13. For revoke link intents -> action:"revokeGroupLink", react:"🚫", reply:""
+14. For group info intents -> action:"getGroupInfo", react:"ℹ️", reply:""
+15. For announce only intents -> action:"groupAnnounce", react:"📣", reply:""
+16. For everyone chat intents -> action:"groupNotAnnounce", react:"💬", reply:""
+17. For lock settings intents -> action:"groupLocked", react:"🔒", reply:""
+18. For unlock settings intents -> action:"groupUnlocked", react:"🔓", reply:""
+19. For disappearing on intents -> action:"setGroupEphemeral", react:"⏳", reply:"", params:{"duration":604800}
+20. For disappearing off intents -> action:"setGroupEphemeral", react:"⏳", reply:"", params:{"duration":0}
+21. For kickall/remove all intents -> action:"kickall", react:"💥", reply:""
+22. For game related intents -> action:"ttt", react:"🎮", reply:""
+23. For ping intents -> action:"ping", react:"⚡", reply:""
+24. For menu help intents -> action:"menu", react:"📋", reply:""
+25. For profile picture intents -> action:"getProfilePic", react:"🖼️", reply:"", target: apply DYNAMIC TARGET RESOLUTION
+26. For TikTok link detected -> action:"tiktok", react:"⏬", reply:""
+27. For Facebook link detected -> action:"facebook", react:"⏬", reply:""
+28. For Instagram link detected -> action:"instagram", react:"⏬", reply:""
+29. NEVER write descriptive phrases like "Task completed", "Done", "Here is", "Starting" in reply field unless action is "chat".
+30. "react" must be single emoji related to action.
+31. If no case matches -> action:"chat", react:"💬", reply:"your answer"
 
-PERMISSION CONTEXT:
-isOwner: ${contextMsg.isOwner}, isAdmin: ${contextMsg.isAdmin}, botIsAdmin: ${contextMsg.botIsAdmin}, isGroup: ${contextMsg.isGroup}
-
-CONTEXT: ${JSON.stringify(contextMsg)}`;
+User input after prefix: ` + contextMsg.text + `
+Quoted participant JID: ` + (quotedJid || '') + `
+Mentioned JIDs: ` + mentionedJids.join(', ') + `
+Is Group: ` + isGroup + `
+Is Admin: ` + isAdmin + `
+Is Owner: ` + isOwnerUser + `;
 
     const messages = [{ role: "system", content: systemPrompt }, { role: "user", content: contextMsg.text }];
 
@@ -344,13 +370,13 @@ CONTEXT: ${JSON.stringify(contextMsg)}`;
         if (!keyData) continue;
         try {
             const result = await callGroqAxios(model, messages, keyData.key);
-            console.log(`\x1b[32mAI_GROQ:\x1b[0m ${model}`);
+            console.log(`\x1b[32mAI_GROQ:\x1b[0m ` + model);
             if (!result.react) result.react = "💬";
             return result;
         } catch (e) {
-            const status = e.response?.status;
-            if (status === 429) console.log(`\x1b[33mAI_GROQ_FAIL:\x1b[0m ${model} limit hit`);
-            else console.log(`\x1b[33mAI_GROQ_FAIL:\x1b[0m ${model} ${status || e.message}`);
+            const status = e.response ? e.response.status : undefined;
+            if (status === 429) console.log(`\x1b[33mAI_GROQ_FAIL:\x1b[0m ` + model + ` limit hit`);
+            else console.log(`\x1b[33mAI_GROQ_FAIL:\x1b[0m ` + model + ` ` + (status || e.message));
         }
     }
 
@@ -358,12 +384,12 @@ CONTEXT: ${JSON.stringify(contextMsg)}`;
     const geminiKey = getGeminiKey();
     if (geminiKey) {
         try {
-            const result = await callGeminiAxios(systemPrompt + `\nUser Input: ${contextMsg.text}`, geminiKey);
+            const result = await callGeminiAxios(systemPrompt + "\nUser Input: " + contextMsg.text, geminiKey);
             console.log(`\x1b[32mAI_GEMINI:\x1b[0m Success`);
             if (!result.react) result.react = "💬";
             return result;
         } catch (e) {
-            console.log(`\x1b[33mAI_GEMINI_FAIL:\x1b[0m ${e.response?.status || e.message}`);
+            console.log(`\x1b[33mAI_GEMINI_FAIL:\x1b[0m ` + (e.response ? e.response.status : e.message));
         }
     }
 
@@ -374,8 +400,8 @@ CONTEXT: ${JSON.stringify(contextMsg)}`;
 async function startBot() {
     console.log('\x1b[32mSERVER:\x1b[0m Starting...');
     console.log('\x1b[34mBoNGo AI Starting...\x1b[0m');
-    console.log('\x1b[34mSESSION_ID Valid:\x1b[0m', process.env.SESSION_ID.startsWith('SWIFTBOT~'));
-    if (!process.env.SESSION_ID.startsWith('SWIFTBOT~')) {
+    console.log('\x1b[34mSESSION_ID Valid:\x1b[0m', process.env.SESSION_ID && process.env.SESSION_ID.startsWith('SWIFTBOT~'));
+    if (!process.env.SESSION_ID || !process.env.SESSION_ID.startsWith('SWIFTBOT~')) {
         console.error('Invalid SESSION_ID. Must start with SWIFTBOT~');
         return;
     }
@@ -423,8 +449,8 @@ async function startBot() {
         const { connection, lastDisconnect } = update;
         
         if(connection === 'close') {
-            const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
-            console.log('\x1b[31mConnection closed:\x1b[0m', lastDisconnect?.error?.message);
+            const shouldReconnect = lastDisconnect && lastDisconnect.error && lastDisconnect.error.output && lastDisconnect.error.output.statusCode !== DisconnectReason.loggedOut;
+            console.log('\x1b[31mConnection closed:\x1b[0m', lastDisconnect && lastDisconnect.error ? lastDisconnect.error.message : '');
             if(shouldReconnect) setTimeout(() => startBot(), 5000);
         }
         
@@ -440,7 +466,7 @@ async function startBot() {
 
         let text = getMessageText(msg);
         
-        if (msg.key.fromMe && text) {
+        if (text) {
             if (text.startsWith('🤔 Processing...') || text.startsWith('✅') || text.startsWith('❌')) {
                 return;
             }
@@ -451,109 +477,144 @@ async function startBot() {
             return;
         }
 
-        const sender = msg.key.participant || msg.key.remoteJid;
-        const jid = msg.key.remoteJid;
-        const isGroup = jid.endsWith('@g.us');
-
-        console.log(`\x1b[36mMSG:\x1b[0m ${text || '[Media]'}`);
-        console.log(`\x1b[36mWHERE:\x1b[0m ${isGroup ? 'Group' : 'DM'}`);
-        console.log(`\x1b[36mFROM:\x1b[0m ${sender.split('@')[0]}`);
-        console.log(`\x1b[36mJID:\x1b[0m ${jid}`);
-
-        text = text.slice(prefix.length).trim();
-
-        // React immediately
-        try {
-            await sock.sendMessage(jid, { react: { text: '🤔', key: msg.key } });
-        } catch(e) {}
-
-        let processingMsg = null;
-        try {
-            processingMsg = await sock.sendMessage(jid, { text: '🤔 Processing...' }, { quoted: msg });
-            console.log('\x1b[35mPROCESSING:\x1b[0m Sent');
-        } catch(e) {
-            console.log('\x1b[31mPROCESSING_FAIL:\x1b[0m', e.message);
-        }
+        const from = msg.key.remoteJid;
+        const isGroup = from.endsWith('@g.us');
+        const senderJid = msg.key.participant || msg.key.remoteJid;
+        const senderNum = senderJid.split('@')[0].split(':')[0];
+        const isOwnerUser = isOwner(senderJid);
 
         let groupMetadata = null;
-        let botIsAdmin = false;
+        let participants = [];
+        let groupAdmins = [];
         let isAdmin = false;
 
         if (isGroup) {
             try {
-                groupMetadata = await sock.groupMetadata(jid);
-                const botId = sock.user.id.split(':')[0] + '@s.whatsapp.net';
-                botIsAdmin = groupMetadata.participants.find(p => p.id === botId)?.admin !== null;
-                isAdmin = groupMetadata.participants.find(p => p.id === sender)?.admin !== null;
+                groupMetadata = await sock.groupMetadata(from);
+                participants = groupMetadata.participants || [];
+                groupAdmins = participants.filter(p => p.admin).map(p => p.id);
+                isAdmin = groupAdmins.includes(senderJid);
             } catch {}
         }
 
+        console.log(`\x1b[36mMSG:\x1b[0m ` + (text || '[Media]'));
+        console.log(`\x1b[36mWHERE:\x1b[0m ` + (isGroup ? 'Group' : 'DM'));
+        console.log(`\x1b[36mFROM:\x1b[0m ` + senderNum);
+        console.log(`\x1b[36mJID:\x1b[0m ` + from);
+        console.log(`\x1b[33mOWNER_CHECK:\x1b[0m senderNum:` + senderNum + ` isOwner:` + isOwnerUser);
+
+        text = text.slice(prefix.length).trim();
+
+        const extTextMsg = msg.message && msg.message.extendedTextMessage ? msg.message.extendedTextMessage : null;
+        const quotedJid = extTextMsg && extTextMsg.contextInfo ? extTextMsg.contextInfo.participant : null;
+        const mentionedJids = extTextMsg && extTextMsg.contextInfo && extTextMsg.contextInfo.mentionedJid ? extTextMsg.contextInfo.mentionedJid : [];
+
+        // React immediately
+        try {
+            await sock.sendMessage(from, { react: { text: '🤔', key: msg.key } });
+        } catch(e) {}
+
+        let processingMsg = null;
+        try {
+            processingMsg = await sock.sendMessage(from, { text: '🤔 Processing...' }, { quoted: msg });
+        } catch(e) {}
+
+        const quotedMsgObj = extTextMsg && extTextMsg.contextInfo && extTextMsg.contextInfo.quotedMessage ? {
+            message: extTextMsg.contextInfo.quotedMessage,
+            key: { remoteJid: from, id: extTextMsg.contextInfo.stanzaId },
+            participant: extTextMsg.contextInfo.participant
+        } : null;
+
+        const hasMedia = !!(msg.message && (msg.message.imageMessage || msg.message.videoMessage || msg.message.stickerMessage || msg.message.audioMessage));
+        const mediaType = getContentType(msg.message);
+        
+        const botIdFull = sock.user.id.split(':')[0] + '@s.whatsapp.net';
+        const botIsAdmin = isGroup && groupAdmins.includes(botIdFull);
+
         const contextMsg = {
             text: text,
-            sender: sender,
-            jid: jid,
+            sender: senderJid,
+            jid: from,
             isGroup: isGroup,
-            isOwner: sender === (botConfig.ownerNumber + '@s.whatsapp.net'),
+            isOwner: isOwnerUser,
             isAdmin: isAdmin,
             botIsAdmin: botIsAdmin,
-            quotedMsg: msg.message?.extendedTextMessage?.contextInfo?.quotedMessage ? {
-                message: msg.message.extendedTextMessage.contextInfo.quotedMessage,
-                key: { remoteJid: jid, id: msg.message.extendedTextMessage.contextInfo.stanzaId },
-                participant: msg.message.extendedTextMessage.contextInfo.participant
-            } : null,
-            quotedSender: msg.message?.extendedTextMessage?.contextInfo?.participant,
-            mentionedJids: msg.message?.extendedTextMessage?.contextInfo?.mentionedJid || [],
-            hasMedia: !!msg.message?.imageMessage || !!msg.message?.videoMessage || !!msg.message?.stickerMessage || !!msg.message?.audioMessage,
-            mediaType: getContentType(msg.message)
+            quotedMsg: quotedMsgObj,
+            quotedSender: quotedJid,
+            mentionedJids: mentionedJids,
+            hasMedia: hasMedia,
+            mediaType: mediaType
         };
 
         try {
+            const plan = await callAI(contextMsg, quotedJid, mentionedJids, isGroup, isAdmin, isOwnerUser);
             console.log(`\x1b[36mAI_INPUT:\x1b[0m Context collected`);
-            const plan = await callAI(contextMsg);
-            console.log(`\x1b[36mAI_PLAN:\x1b[0m Action: ${plan.action}, React: ${plan.react}`);
+            console.log(`\x1b[36mAI_PLAN:\x1b[0m Action: ` + plan.action + `, React: ` + plan.react + `, Target: ` + plan.target);
 
             if (plan.react) {
                 try {
-                    await sock.sendMessage(jid, { react: { text: plan.react, key: msg.key } });
-                    console.log(`\x1b[32mREACT:\x1b[0m ${plan.react}`);
-                } catch(e) { console.log(`\x1b[31mREACT_FAIL:\x1b[0m`, e.message); }
+                    await sock.sendMessage(from, { react: { text: plan.react, key: msg.key } });
+                } catch(e) {}
             }
 
-            let execResultText = plan.reply || 'Task completed';
-            
-            if (plan.action && cases.has(plan.action)) {
-                console.log(`\x1b[32mCASE_EXEC:\x1b[0m ${plan.action}`);
+            if (plan.action && plan.action !== 'chat' && cases.has(plan.action)) {
+                console.log(`\x1b[32mCASE_EXEC:\x1b[0m ` + plan.action);
                 const caseFile = cases.get(plan.action);
-                const { default: executeCase } = await import(`file://${caseFile}`);
-                await executeCase(sock, plan, {...contextMsg, msg, getContentType, downloadMediaMessage, addMemory, getMemory });
-            } else if (plan.reply) {
-                // Do nothing, reply will be in processing message
+                const { default: executeCase } = await import(`file://` + caseFile);
+                await executeCase(sock, plan, {
+                    from: from,
+                    jid: from,
+                    msg: msg,
+                    sender: senderJid,
+                    senderNum: senderNum,
+                    isOwner: isOwnerUser,
+                    isGroup: isGroup,
+                    isAdmin: isAdmin,
+                    groupMetadata: groupMetadata,
+                    participants: participants,
+                    groupAdmins: groupAdmins,
+                    text: text,
+                    quotedJid: quotedJid,
+                    mentionedJids: mentionedJids,
+                    getContentType: getContentType,
+                    downloadMediaMessage: downloadMediaMessage,
+                    addMemory: addMemory,
+                    getMemory: getMemory,
+                    botIsAdmin: botIsAdmin,
+                    quotedMsg: quotedMsgObj
+                });
+                console.log('\x1b[32mTASK_DONE:\x1b[0m Case completed');
+            } else {
+                if (plan.reply) {
+                    await sock.sendMessage(from, { text: plan.reply }, { quoted: msg });
+                }
             }
 
             if (processingMsg) {
                 try {
-                    await sock.sendMessage(jid, { text: `✅ ${execResultText}`, edit: processingMsg.key });
-                    console.log(`\x1b[32mEDIT:\x1b[0m Success`);
-                } catch(e) { console.log(`\x1b[31mEDIT_FAIL:\x1b[0m`, e.message); }
+                    await sock.sendMessage(from, { text: '✅', edit: processingMsg.key });
+                    console.log(`\x1b[32mEDIT:\x1b[0m ✅`);
+                } catch(e) {}
             }
 
             try {
-                await sock.sendMessage(jid, { react: { text: '✅', key: msg.key } });
+                await sock.sendMessage(from, { react: { text: '✅', key: msg.key } });
                 console.log(`\x1b[32mFINAL_REACT:\x1b[0m ✅`);
-            } catch(e) { console.log(`\x1b[31mFINAL_REACT_FAIL:\x1b[0m`, e.message); }
+            } catch(e) {}
 
         } catch (e) {
-            console.log('\x1b[31mCASE_ERROR:\x1b[0m', e.message);
+            console.log('\x1b[31mERROR:\x1b[0m', e.message);
+            console.log('\x1b[31mTASK_FAIL:\x1b[0m', e.message);
             if (processingMsg) {
                 try {
-                    await sock.sendMessage(jid, { text: `❌ Error: ${e.message}`, edit: processingMsg.key });
-                    console.log(`\x1b[32mEDIT:\x1b[0m Error shown`);
-                } catch(err) { console.log(`\x1b[31mEDIT_FAIL:\x1b[0m`, err.message); }
+                    await sock.sendMessage(from, { text: '❌', edit: processingMsg.key });
+                    console.log(`\x1b[32mEDIT:\x1b[0m ❌`);
+                } catch(err) {}
             }
             try {
-                await sock.sendMessage(jid, { react: { text: '❌', key: msg.key } });
+                await sock.sendMessage(from, { react: { text: '❌', key: msg.key } });
                 console.log(`\x1b[32mFINAL_REACT:\x1b[0m ❌`);
-            } catch(err) { console.log(`\x1b[31mFINAL_REACT_FAIL:\x1b[0m`, err.message); }
+            } catch(err) {}
         }
     });
 

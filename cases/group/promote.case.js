@@ -1,8 +1,9 @@
-export default async (sock, plan, context) => {
-    if (!context.botIsAdmin) throw new Error('Bot requires admin');
-    if (!context.isAdmin && !context.isOwner) throw new Error('Admin only');
-    const target = plan.target || context.quotedSender || context.mentionedJids[0];
-    if (!target) throw new Error('Reply to user or mention them');
-    await sock.groupParticipantsUpdate(context.jid, [target], "promote");
-    if (plan.reply) await sock.sendMessage(context.jid, { text: plan.reply }, { quoted: context.msg });
-};
+export default async function(sock, plan, context) {
+    const { from, isGroup, isAdmin, isOwner } = context;
+    if (!isGroup) throw new Error('This command works in groups only');
+    if (!isAdmin && !isOwner) throw new Error('Only admins can promote');
+    if (!plan.target) throw new Error('No target provided');
+    
+    await sock.groupParticipantsUpdate(from, [plan.target], 'promote');
+    console.log('\x1b[32mGROUP_ACTION:\x1b[0m promote executed on ' + plan.target);
+}

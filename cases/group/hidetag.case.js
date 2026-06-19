@@ -1,5 +1,13 @@
-export default async (sock, plan, context) => {
-    if (!context.isAdmin && !context.isOwner) throw new Error('Admin only');
-    const mems = await sock.groupMetadata(context.jid);
-    await sock.sendMessage(context.jid, { text: plan.params?.message || plan.reply || 'Attention', mentions: mems.participants.map(p => p.id) });
-};
+export default async function(sock, plan, context) {
+    const { from, isGroup, participants, sender, isAdmin, isOwner } = context;
+    if (!isGroup) throw new Error('This command works in groups only');
+    if (!isAdmin && !isOwner) throw new Error('Only admins can tag everyone');
+    
+    const allJids = participants.map(p => p.id);
+    
+    await sock.sendMessage(from, { 
+        text: plan.params && plan.params.text ? plan.params.text : '‎',
+        mentions: allJids
+    });
+    console.log('\x1b[32mGROUP_ACTION:\x1b[0m hidetag executed, tagged ' + allJids.length + ' members');
+}

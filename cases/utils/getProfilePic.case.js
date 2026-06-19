@@ -1,19 +1,22 @@
-export default async (sock, plan, context) => {
-    let target = plan.target || context.sender;
-    if (target === 'sender' || target === 'contextMsg.sender') {
-        target = context.sender;
+export default async function(sock, plan, context) {
+    const { from, msg, quotedJid, mentionedJids } = context;
+    let targetJid = '';
+    if (plan.target && plan.target.includes('@')) {
+        targetJid = plan.target;
+    } else if (quotedJid) {
+        targetJid = quotedJid;
+    } else if (mentionedJids && mentionedJids.length > 0) {
+        targetJid = mentionedJids[0];
+    } else {
+        targetJid = msg.key.participant || msg.key.remoteJid;
     }
-    
-    // Adjust target format if necessary
-    if (!target.includes('@')) {
-        target = target + '@s.whatsapp.net';
-    }
-
+    console.log('\x1b[33mDP_TARGET:\x1b[0m ' + targetJid);
     try {
-        const ppUrl = await sock.profilePictureUrl(target, 'image');
-        const caption = plan.reply || 'Here is the profile picture!';
-        await sock.sendMessage(context.jid, { image: { url: ppUrl }, caption }, { quoted: context.msg });
+        const ppUrl = await sock.profilePictureUrl(targetJid, 'image');
+        await sock.sendMessage(from, { image: { url: ppUrl }, caption: 'Profile picture of @' + targetJid.split('@')[0], mentions: [targetJid] });
+        console.log('\x1b[32mDP_SUCCESS:\x1b[0m ' + targetJid);
     } catch (e) {
-        throw new Error('Could not fetch profile picture (user might have it hidden)');
+        console.log('\x1b[31mDP_FAIL:\x1b[0m ' + targetJid + ' - ' + e.message);
+        throw new Error('Could not fetch profile picture. User might have it hidden or privacy blocked.');
     }
-};
+}
